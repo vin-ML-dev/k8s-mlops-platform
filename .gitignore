@@ -1,0 +1,21 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+kind-config-*
+kubeconfig*
+LICENSE.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets (NEVER commit plaintext)
+tmp/
+*-secret.yaml
+!*-sealed.yaml
+!*.example.yaml

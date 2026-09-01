@@ -1,0 +1,28 @@
+# 3-node kind cluster for the MLOps platform.
+#   control-plane -> node-role=infra   (Argo, gateway, Redis, monitoring)
+#   worker        -> node-role=model   (llama.cpp + GGUF)
+#   worker2       -> node-role=agent   (LangGraph monitoring agent)
+#
+# Node role LABELS are set here (reliable across kind versions). Node TAINTS are
+# applied by hand after creation (kind's inline taint handling is inconsistent
+# across versions) — see COMPONENT_0_GUIDE.md.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mlops
+nodes:
+  - role: control-plane
+    labels:
+      node-role: infra
+    # host port mappings for reaching services during local testing.
+    # (8080 on the host is used by this map, so port-forwards use a different
+    #  local port such as 9080 — noted in the guides.)
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+  - role: worker
+    labels:
+      node-role: model
+  - role: worker
+    labels:
+      node-role: agent
