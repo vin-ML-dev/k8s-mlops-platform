@@ -7,6 +7,7 @@ crash.log
 kind-config-*
 kubeconfig*
 LICENSE.txt
+*-config
 
 # Python
 __pycache__/
