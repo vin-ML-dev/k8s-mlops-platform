@@ -1,0 +1,48 @@
+# AppProject — the guardrail. Restricts what the platform's Applications may do:
+# which Git repo they can pull from, which namespaces they can deploy to, and
+# which cluster-scoped resources they may create.
+#
+# NOTE: the root app does NOT sync this file — apply it by hand whenever it
+# changes (kubectl apply -f argocd/projects/mlops-project.yaml). As later
+# components need new cluster-scoped resources (webhooks, ClusterRoles), they get
+# added to clusterResourceWhitelist here.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: mlops
+  namespace: argocd
+spec:
+  description: "k8s-mlops-platform GitOps project"
+  sourceRepos:
+    - "https://github.com/vin-ML-dev/k8s-mlops-platform.git"
+    # Helm repo for the monitoring stack (Component 4)
+    - "https://prometheus-community.github.io/helm-charts"
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: mlops
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    - server: https://kubernetes.default.svc
+      namespace: kube-system
+  # cluster-scoped resources the platform is allowed to create
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: monitoring.coreos.com
+      kind: "*"
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+  # allow any namespaced resource within the permitted namespaces
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
