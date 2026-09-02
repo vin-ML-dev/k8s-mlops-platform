@@ -1,0 +1,116 @@
+# kube-prometheus-stack Helm values — tuned for the 3-node kind cluster.
+# All nodes share one laptop, so replicas/retention/resources are kept modest.
+# Grafana is ENABLED this time (golden-signals dashboards land in Component 9).
+#
+# The Alertmanager Slack config is INLINE here (alertmanager.config), NOT a
+# separate AlertmanagerConfig CRD. This is deliberate: a namespaced
+# AlertmanagerConfig gets an operator-injected `namespace=` matcher that silently
+# drops alerts from other namespaces (mlops) and label-less alerts (the absent()
+# dead-man). Inline config has no such matcher, so every alert routes to Slack.
+
+fullnameOverride: kps
+
+# ---------------------------------------------------------------------------
+# Silence the chart's BUILT-IN Kubernetes alert rules and keep ONLY our rules.
+# On kind these built-ins misfire (KubeAPIErrorBudgetBurn, TargetDown, etc.)
+# because there's no real control plane / API error budget to measure.
+# ---------------------------------------------------------------------------
+defaultRules:
+  create: false
+
+# --- disable control-plane scrape jobs that don't exist on kind (avoids noisy "target down") ---
+kubeControllerManager: { enabled: false }
+kubeScheduler:         { enabled: false }
+kubeProxy:             { enabled: false }
+kubeEtcd:              { enabled: false }
+
+# --- Prometheus (StatefulSet) ---
+prometheus:
+  prometheusSpec:
+    replicas: 1
+    retention: 6h
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    # discover OUR ServiceMonitors / PrometheusRules. Our objects carry
+    # release=kps, but setting these false also picks up unlabelled ones locally.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits:   { memory: 900Mi }
+    # ephemeral storage on kind (fine to lose locally; avoids PVC hassle)
+
+# ---------------------------------------------------------------------------
+# Alertmanager (StatefulSet) — Path 1: the reliable Slack alerting path.
+# Inline config; state-aware templates gate firing/resolved wording on .Status
+# so a resolved notification reads "Recovered", never "is down".
+# Keep each template on one single-quoted line so no stray newlines leak.
+# ---------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
+      limits:   { memory: 128Mi }
+    # mount the sealed Slack webhook at
+    # /etc/alertmanager/secrets/alertmanager-slack/webhook
+    secrets:
+      - alertmanager-slack
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: slack-default
+      group_by: ["alertname", "severity", "namespace"]
+      group_wait: 30s
+      group_interval: 1m
+      repeat_interval: 4h
+      routes:
+        - matchers: ['severity="critical"']
+          receiver: slack-critical
+          repeat_interval: 1h
+    receivers:
+      - name: slack-default
+        slack_configs:
+          - channel: "#finbot-alerts"
+            send_resolved: true
+            api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+            title: '{{ if eq .Status "firing" }}🔥 FIRING{{ else }}✅ RESOLVED{{ end }} · {{ .CommonLabels.alertname }} · {{ .CommonLabels.severity }}'
+            text: '{{ if eq .Status "firing" }}{{ range .Alerts }}*{{ .Annotations.summary }}* — {{ .Annotations.description }}{{ "\n" }}{{ end }}{{ else }}✅ Recovered — the condition has cleared.{{ end }}'
+      - name: slack-critical
+        slack_configs:
+          - channel: "#finbot-alerts"
+            send_resolved: true
+            api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+            title: '{{ if eq .Status "firing" }}🔥 [CRITICAL] FIRING{{ else }}✅ [CRITICAL] RESOLVED{{ end }} · {{ range .Alerts }}{{ .Labels.alertname }}{{ end }}'
+            text: '{{ if eq .Status "firing" }}{{ range .Alerts }}{{ .Annotations.description }}{{ "\n" }}{{ end }}{{ else }}✅ Recovered — the condition has cleared.{{ end }}'
+
+# ---------------------------------------------------------------------------
+# Grafana (Deployment) — ENABLED. Dashboards are provisioned in Component 9.
+# Given more headroom than the kind default so it doesn't OOM.
+# ---------------------------------------------------------------------------
+grafana:
+  enabled: true
+  adminPassword: admin           # LOCAL ONLY — use a secret in production
+  defaultDashboardsEnabled: true
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { memory: 512Mi }
+  # auto-load dashboards from ConfigMaps labelled grafana_dashboard=1 (Component 9)
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+
+# --- keep kube-state-metrics (deployment/pod signals the rules use) + node-exporter ---
+kube-state-metrics:
+  resources:
+    requests: { cpu: 10m, memory: 48Mi }
+    limits:   { memory: 128Mi }
+prometheus-node-exporter:
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
