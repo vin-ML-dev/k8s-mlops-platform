@@ -1,0 +1,66 @@
+# Redis — shared state for the gateway (cache, rate-limit counters) and the agent
+# (incident state). A single-replica StatefulSet with a PVC: stable identity
+# (redis-0) and persistent data.
+#
+# NOT highly available, and that's deliberate: the gateway fails OPEN, so if Redis
+# blips the gateway degrades (no cache, no rate limit) rather than breaking. HA
+# (replication + Sentinel) would add complexity to solve a failure the fail-open
+# design already handles. See COMPONENT_3_GUIDE.md.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: mlops
+  labels:
+    app: redis
+spec:
+  serviceName: redis          # the headless service (stable network identity)
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      # prefer the infra node (Node A) — this is core infrastructure. Soft
+      # preference (not a hard nodeSelector) so it still schedules if needed.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role
+                    operator: In
+                    values: ["infra"]
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          args: ["--appendonly", "yes"]     # persist to the PVC
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests: { cpu: "25m", memory: "64Mi" }
+            limits:   { memory: "256Mi" }
+          livenessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
