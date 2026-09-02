@@ -1,0 +1,114 @@
+# llama.cpp model server — Node B (the heavy, isolated workload).
+#
+# Uses the PUBLIC llama.cpp server image with the GGUF downloaded at runtime, so
+# there is NO custom model image to build (CI only builds gateway + agent).
+#
+# Key behaviors:
+#   - initContainer downloads the GGUF ONCE into the PVC (skip-if-exists).
+#   - pinned to Node B: nodeSelector node-role=model + toleration dedicated=model.
+#   - Recreate strategy: the PVC is ReadWriteOnce (can't be shared across a rolling update).
+#   - generous startupProbe: the model load is slow.
+#   - CPU-only, ctx 1024 / threads 2 for local kind.
+#
+# CHANGE the GGUF filename in TWO places if yours differs: the initContainer's
+# MODEL_FILE and the server's -m arg.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-cpp
+  namespace: mlops
+  labels:
+    app: llama-cpp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: llama-cpp
+  template:
+    metadata:
+      labels:
+        app: llama-cpp
+    spec:
+      nodeSelector:
+        node-role: model
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "model"
+          effect: "NoSchedule"
+      terminationGracePeriodSeconds: 120
+
+      initContainers:
+        - name: fetch-model
+          image: curlimages/curl:8.9.1
+          env:
+            - name: MODEL_REPO
+              value: "vinmlops/finbot-qwen3-1.7b-gguf"
+            - name: MODEL_FILE
+              value: "finbot-qwen3-1.7b-baseline-q8_0.gguf"   # <-- CHANGE if your file differs
+            # Public repo: no token needed. If PRIVATE, uncomment and add the
+            # Authorization header on the curl below.
+            # - name: HF_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: model-secret, key: HF_TOKEN }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              DEST="/models/${MODEL_FILE}"
+              if [ -f "${DEST}" ]; then
+                echo "model already cached at ${DEST} — skipping download"
+                exit 0
+              fi
+              echo "downloading ${MODEL_FILE} from ${MODEL_REPO} ..."
+              URL="https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true"
+              curl -fSL --retry 3 -o "${DEST}.part" "${URL}"
+              mv "${DEST}.part" "${DEST}"
+              echo "download complete: $(ls -lh ${DEST})"
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+
+      containers:
+        - name: llama-cpp
+          image: ghcr.io/ggml-org/llama.cpp:server
+          args:
+            - "-m"
+            - "/models/finbot-qwen3-1.7b-baseline-q8_0.gguf"   # <-- CHANGE to match MODEL_FILE
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8080"
+            - "--ctx-size"
+            - "1024"
+            - "--threads"
+            - "2"
+            - "--metrics"
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests: { cpu: "500m", memory: "1500Mi" }
+            limits:   { memory: "3Gi" }
+          startupProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 30       # ~5 min to load
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache
