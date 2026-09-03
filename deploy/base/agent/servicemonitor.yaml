@@ -1,0 +1,19 @@
+# Prometheus scrapes the agent's heartbeat (release: kps selects it). This feeds
+# monitoring_agent_heartbeat_timestamp_seconds, which the dead-man rule watches.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: agent
+  namespace: mlops
+  labels:
+    release: kps
+spec:
+  selector:
+    matchLabels:
+      app: agent
+  namespaceSelector:
+    matchNames: [mlops]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

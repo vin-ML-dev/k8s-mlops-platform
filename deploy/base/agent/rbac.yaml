@@ -1,0 +1,33 @@
+# The agent reads cluster state to correlate incidents, but NEVER modifies
+# anything — the "LLM explains, never fixes" principle enforced at the RBAC layer.
+# Read-only (get/list/watch), no create/update/delete/patch anywhere.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mlops-agent
+  namespace: mlops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlops-agent-readonly
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mlops-agent-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlops-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: mlops-agent
+    namespace: mlops

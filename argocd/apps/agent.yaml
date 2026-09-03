@@ -1,0 +1,27 @@
+# Child app (wave 4): the monitoring agent.
+#
+# wave 4 = after the model (2) and gateway (3) it observes. The monitoring config
+# (Component 8) comes at wave 5 — AFTER the agent — so the dead-man rule sees a
+# fresh heartbeat the moment it's installed (no false MonitoringAgentDown alert).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agent
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mlops
+  source:
+    repoURL: "https://github.com/vin-ML-dev/k8s-mlops-platform.git"
+    targetRevision: main
+    path: deploy/base/agent
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

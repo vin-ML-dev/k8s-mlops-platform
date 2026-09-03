@@ -1,0 +1,57 @@
+# Monitoring agent — Node C (the explanation layer, Path 2).
+#
+# LangGraph agent: reads Prometheus, probes the gateway/model, classifies health,
+# LLM-explains NEW incidents on its own Slack path, and emits the heartbeat the
+# dead-man rule watches. Read-only RBAC (never fixes). Pinned to Node C.
+#
+# IMAGE from Docker Hub via Kustomize images:newTag (like the gateway).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: mlops
+  labels:
+    app: agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      serviceAccountName: mlops-agent    # read-only access (rbac.yaml)
+      nodeSelector:
+        node-role: agent
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "agent"
+          effect: "NoSchedule"
+      containers:
+        - name: agent
+          image: vin1989/finbot-agent     # tag applied by Kustomize images:newTag
+          ports:
+            - name: metrics
+              containerPort: 9108
+          env:
+            - name: SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef: { name: agent-secret, key: SLACK_WEBHOOK }
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: agent-secret, key: OPENAI_API_KEY }
+            - name: GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef: { name: agent-secret, key: GATEWAY_API_KEY }
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { memory: "256Mi" }
+          livenessProbe:
+            httpGet: { path: /metrics, port: 9108 }
+            initialDelaySeconds: 15
+            periodSeconds: 30

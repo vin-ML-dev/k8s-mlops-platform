@@ -1,0 +1,47 @@
+# Monitoring agent configuration.
+# Key names below MUST match what main.py reads. The agent fails a cycle (and
+# logs "cycle error: '<key>'") if a key it expects is missing.
+
+metrics_port: 9108        # agent exposes /metrics here (heartbeat lives here)
+
+prometheus:
+  base_url: "http://kps-prometheus.monitoring:9090"
+
+redis:
+  url: "redis://redis-svc.mlops:6379/1"   # db 1 (gateway uses db 0)
+
+gateway:
+  base_url: "http://fastapi-gateway-svc.mlops:8000"
+
+model:
+  base_url: "http://llama-cpp-svc.mlops:8080"
+
+# how long before re-notifying about the same ongoing incident (seconds)
+cooldown_seconds: 900
+
+# canary: read the gateway API key from this env var (from the sealed secret).
+# cases default to the built-in DEFAULT_CANARY_CASES in the code.
+canary:
+  api_key_env: "GATEWAY_API_KEY"
+
+schedule:
+  poll_interval_seconds: 30           # health poll cadence
+  canary_interval_seconds: 900        # run a canary every 15 min
+  daily_hour_utc: 6                   # daily summary at 06:00 UTC
+
+# deterministic health thresholds — names MUST match classify():
+thresholds:
+  p95_latency_seconds: 5.0
+  backend_error_ratio: 0.10
+  pod_restarts_15m: 3
+  breaker_open_value: 1
+  min_model_replicas: 1
+
+# LLM explainer. backend = template | openai | ollama.
+#   template = no LLM, deterministic fallback text (no API key needed)
+#   openai   = uses OPENAI_API_KEY env + the openai block below
+llm:
+  backend: "openai"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o-mini"
