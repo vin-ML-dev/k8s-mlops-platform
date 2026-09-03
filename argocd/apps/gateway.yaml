@@ -1,0 +1,24 @@
+# Child app (wave 3): the API gateway. After the model (wave 2), because the
+# gateway's readiness depends on reaching the model.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mlops
+  source:
+    repoURL: "https://github.com/vin-ML-dev/k8s-mlops-platform.git"
+    targetRevision: main
+    path: deploy/base/gateway
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mlops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,61 @@
+# API gateway — the policy-and-resilience layer in front of the model.
+#
+# Stateless, so SPREAD across nodes (not pinned like the model). Losing one node
+# loses one replica, not the whole front door. An HPA scales it.
+#
+# IMAGE: the tag is NOT set here — Kustomize's images:newTag (in kustomization.yaml)
+# stamps the tag. CI updates that one line with the git-<sha>. For the first manual
+# deploy, push vin1989/finbot-gateway:<tag> and set newTag to match.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: mlops
+  labels:
+    app: gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      # spread replicas across nodes (soft) so they don't pile onto one node
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: gateway
+      # no model/agent taint tolerations -> stays off Node B and Node C
+      containers:
+        - name: gateway
+          image: vin1989/finbot-gateway     # tag applied by Kustomize images:newTag
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_BASE_URL
+              value: "http://llama-cpp-svc:8080"
+            - name: REDIS_URL
+              value: "redis://redis-svc:6379/0"
+            - name: GATEWAY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-secret
+                  key: GATEWAY_API_KEY
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { memory: "256Mi" }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10

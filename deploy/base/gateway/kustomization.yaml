@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mlops
+
+# CI updates newTag with the git-<sha>; for the first manual deploy set it to
+# whatever tag you pushed (e.g. "v1" or a commit sha).
+images:
+  - name: vin1989/finbot-gateway
+    newTag: v1
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - servicemonitor.yaml
