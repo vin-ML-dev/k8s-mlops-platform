@@ -99,7 +99,7 @@ grafana:
   defaultDashboardsEnabled: true
   resources:
     requests: { cpu: 50m, memory: 128Mi }
-    limits:   { memory: 512Mi }
+    limits:   { memory: 800Mi }
   # auto-load dashboards from ConfigMaps labelled grafana_dashboard=1 (Component 9)
   sidecar:
     dashboards:
