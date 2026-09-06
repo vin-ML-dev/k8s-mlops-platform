@@ -1,0 +1,26 @@
+# Child app (wave 6): Grafana dashboards. After the workloads and monitoring
+# config, so the metrics the dashboards query already exist. The dashboard is a
+# ConfigMap labelled grafana_dashboard=1, which the Grafana sidecar (Component 4)
+# auto-loads — GitOps-managed, no manual import.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana-dashboards
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mlops
+  source:
+    repoURL: "https://github.com/vin-ML-dev/k8s-mlops-platform.git"
+    targetRevision: main
+    path: deploy/base/grafana-dashboards
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
