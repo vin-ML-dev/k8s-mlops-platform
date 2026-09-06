@@ -30,6 +30,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
+          "min": 0,
+          "max": 1,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -51,6 +53,7 @@
     {
       "id": 3,
       "title": "Gateway — Upstream Latency p50 / p95 / p99 (latency)",
+      "description": "Model-call latency measured by the gateway. Values fixed at 10s can mean 10s or longer until the gateway histogram defines buckets above 10s.",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
@@ -77,7 +80,10 @@
       "title": "Gateway — Cache Hit Ratio",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
       "targets": [
         {
           "expr": "sum(rate(gateway_cache_hits_total[5m])) / clamp_min(sum(rate(gateway_requests_total[5m])), 1)",
