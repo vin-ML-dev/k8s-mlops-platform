@@ -4,7 +4,7 @@ namespace: mlops
 
 images:
   - name: vin1989/finbot-agent
-    newTag: v1
+    newTag: git-5230a026fd4b
 
 resources:
   - rbac.yaml
