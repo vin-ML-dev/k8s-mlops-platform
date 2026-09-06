@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read        # least privilege — validation writes nothing
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lint (ruff) — blocking
+        run: |
+          pip install ruff==0.6.9
+          ruff check services/          # no '|| true' — a lint failure blocks the PR
+
+      - name: Unit tests — gateway
+        run: |
+          pip install -r services/gateway/requirements.txt pytest==8.3.3 pytest-asyncio==0.24.0
+          cd services/gateway && python -m pytest tests/ -q
+
+      - name: Unit tests — agent
+        run: |
+          pip install -r services/agent/requirements.txt pytest==8.3.3
+          cd services/agent && python -m pytest tests/ -q
+
+      - name: Install kustomize + kubeconform (pinned)
+        run: |
+          KUSTOMIZE_VER=v5.4.3
+          KUBECONFORM_VER=v0.6.7
+          curl -fsSL -o kustomize.tgz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VER}/kustomize_${KUSTOMIZE_VER}_linux_amd64.tar.gz"
+          tar xzf kustomize.tgz && sudo install kustomize /usr/local/bin/
+          curl -fsSL -o kubeconform.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VER}/kubeconform-linux-amd64.tar.gz"
+          tar xzf kubeconform.tgz && sudo install kubeconform /usr/local/bin/
+
+      - name: Validate manifests (kustomize build + kubeconform)
+        run: |
+          for d in deploy/base/*/; do
+            [ -f "$d/kustomization.yaml" ] || continue
+            echo "== $d =="
+            kustomize build "$d" | kubeconform -strict -ignore-missing-schemas -summary
+          done
+
+  # Build + scan both images to prove they build and are clean.
+  # No push, no credentials — this is validation, not publishing.
+  build-scan:
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway, agent]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.service }} image (no push)
+        run: docker build -t local/finbot-${{ matrix.service }}:pr services/${{ matrix.service }}
+
+      - name: Scan ${{ matrix.service }} image (Trivy) — blocking on HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: local/finbot-${{ matrix.service }}:pr
+          format: table
+          exit-code: "1"                 # FAIL the PR on findings (blocking policy)
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true

@@ -1,0 +1,89 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/gateway/**'
+      - 'services/agent/**'
+
+permissions:
+  contents: write        # to write the new image tag back to main
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.filter.outputs.gateway }}
+      agent: ${{ steps.filter.outputs.agent }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            gateway:
+              - 'services/gateway/**'
+            agent:
+              - 'services/agent/**'
+
+  publish:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway, agent]
+      max-parallel: 1        # serialize so the two tag commits to main don't collide
+    steps:
+      - name: Skip if this service didn't change
+        id: gate
+        run: |
+          changed="${{ matrix.service == 'gateway' && needs.changes.outputs.gateway || needs.changes.outputs.agent }}"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.changed == 'true'
+        with:
+          ref: main
+
+      - name: Set immutable image tag (real commit SHA on main)
+        if: steps.gate.outputs.changed == 'true'
+        id: tag
+        run: echo "tag=git-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        if: steps.gate.outputs.changed == 'true'
+        run: docker build -t vin1989/finbot-${{ matrix.service }}:${{ steps.tag.outputs.tag }} services/${{ matrix.service }}
+
+      - name: Scan image (Trivy) — blocking
+        if: steps.gate.outputs.changed == 'true'
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: vin1989/finbot-${{ matrix.service }}:${{ steps.tag.outputs.tag }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Log in to Docker Hub
+        if: steps.gate.outputs.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push image
+        if: steps.gate.outputs.changed == 'true'
+        run: docker push vin1989/finbot-${{ matrix.service }}:${{ steps.tag.outputs.tag }}
+
+      - name: Update newTag in the kustomization (on main)
+        if: steps.gate.outputs.changed == 'true'
+        run: |
+          f=deploy/base/${{ matrix.service }}/kustomization.yaml
+          sed -i "s|newTag: .*|newTag: ${{ steps.tag.outputs.tag }}|" "$f"
+          git config user.name  "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add "$f"
+          git commit -m "release: ${{ matrix.service }} image ${{ steps.tag.outputs.tag }}" || echo "no change"
+          git pull --rebase origin main
+          git push origin HEAD:main
