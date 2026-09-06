@@ -8,7 +8,7 @@ kind-config-*
 kubeconfig*
 LICENSE.txt
 *-config
-
+!deploy/base/monitoring-config/
 # Python
 __pycache__/
 *.pyc
