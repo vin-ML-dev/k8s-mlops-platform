@@ -6,7 +6,7 @@ namespace: mlops
 # whatever tag you pushed (e.g. "v1" or a commit sha).
 images:
   - name: vin1989/finbot-gateway
-    newTag: v1
+    newTag: git-5230a026fd4b
 
 resources:
   - deployment.yaml
