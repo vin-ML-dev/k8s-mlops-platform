@@ -1,0 +1,104 @@
+# PrometheusRules — the alert CONDITIONS. State-agnostic: a rule says WHEN
+# something is wrong; the Alertmanager templates (in the Component 4 values) own
+# the state-aware firing/resolved wording.
+#
+# release: kps is what the kube-prometheus-stack Prometheus selects on.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mlops-rules
+  namespace: monitoring
+  labels:
+    release: kps
+spec:
+  groups:
+    # -----------------------------------------------------------------
+    # recording rules — precompute reused expressions
+    # -----------------------------------------------------------------
+    - name: mlops.recording
+      interval: 30s
+      rules:
+        - record: mlops:gateway_requests:rate5m
+          expr: sum(rate(gateway_requests_total[5m]))
+        - record: mlops:gateway_errors:rate5m
+          expr: sum(rate(gateway_requests_total{status=~"5.."}[5m]))
+        - record: mlops:gateway_error_ratio:rate5m
+          expr: |
+            mlops:gateway_errors:rate5m
+              / clamp_min(mlops:gateway_requests:rate5m, 1)
+
+    # -----------------------------------------------------------------
+    # availability — readiness, not existence. Handle the metric going
+    # ABSENT (a deployment scaled to 0 stops reporting) with or absent().
+    # -----------------------------------------------------------------
+    - name: mlops.availability
+      rules:
+        - alert: ModelDown
+          expr: |
+            kube_deployment_status_replicas_available{namespace="mlops", deployment="llama-cpp"} < 1
+              or absent(kube_deployment_status_replicas_available{namespace="mlops", deployment="llama-cpp"})
+          for: 2m
+          labels:
+            severity: critical
+            component: model
+          annotations:
+            summary: "Model server is not serving"
+            description: "The llama-cpp deployment has no available replicas in namespace mlops."
+
+        - alert: GatewayDegraded
+          expr: |
+            kube_deployment_status_replicas_available{namespace="mlops", deployment="gateway"}
+              < kube_deployment_spec_replicas{namespace="mlops", deployment="gateway"}
+          for: 5m
+          labels:
+            severity: warning
+            component: gateway
+          annotations:
+            summary: "Gateway is running below desired replicas"
+            description: "The gateway has fewer available replicas than desired for 5 minutes."
+
+        - alert: GatewayDown
+          expr: |
+            kube_deployment_status_replicas_available{namespace="mlops", deployment="gateway"} < 1
+              or absent(kube_deployment_status_replicas_available{namespace="mlops", deployment="gateway"})
+          for: 2m
+          labels:
+            severity: critical
+            component: gateway
+          annotations:
+            summary: "Gateway is down"
+            description: "The gateway has no available replicas in namespace mlops."
+
+    # -----------------------------------------------------------------
+    # error-rate
+    # -----------------------------------------------------------------
+    - name: mlops.errors
+      rules:
+        - alert: GatewayHighErrorRate
+          expr: mlops:gateway_error_ratio:rate5m > 0.10
+          for: 5m
+          labels:
+            severity: warning
+            component: gateway
+          annotations:
+            summary: "Gateway 5xx error ratio above 10%"
+            description: "More than 10% of gateway requests returned 5xx over the last 5 minutes."
+
+    # -----------------------------------------------------------------
+    # dead-man switch — the watcher must be watched.
+    # absent() catches the heartbeat SERIES disappearing (agent scaled to 0);
+    # the time() clause catches it going stale while still present.
+    # -----------------------------------------------------------------
+    - name: mlops.deadman
+      rules:
+        - alert: MonitoringAgentDown
+          expr: |
+            absent(monitoring_agent_heartbeat_timestamp_seconds)
+              or (time() - max(monitoring_agent_heartbeat_timestamp_seconds) > 120)
+          for: 1m
+          labels:
+            severity: critical
+            component: agent
+          annotations:
+            summary: "Monitoring agent heartbeat missing or stale"
+            description: "No agent heartbeat for over 2 minutes (or the series is absent). The watcher itself may be down."

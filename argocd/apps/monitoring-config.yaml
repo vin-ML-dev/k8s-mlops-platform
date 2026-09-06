@@ -1,0 +1,27 @@
+# Child app (wave 5): the monitoring CONFIG — the alert rules.
+#
+# wave 5 = AFTER the agent (wave 4). So when the dead-man rule loads, the agent's
+# heartbeat is already flowing — no false MonitoringAgentDown alert on install.
+# (The Alertmanager Slack routing lives in the Component 4 Helm values, not here.)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: mlops
+  source:
+    repoURL: "https://github.com/vin-ML-dev/k8s-mlops-platform.git"
+    targetRevision: main
+    path: deploy/base/monitoring-config
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
