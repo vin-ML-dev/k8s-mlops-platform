@@ -1,6 +1,6 @@
-# The agent reads cluster state to correlate incidents, but NEVER modifies
-# anything — the "LLM explains, never fixes" principle enforced at the RBAC layer.
-# Read-only (get/list/watch), no create/update/delete/patch anywhere.
+# The agent reads cluster state to correlate incidents AND now reads pod logs +
+# events to explain the exact root cause — but NEVER modifies anything.
+# Strictly read-only (get/list/watch): the "LLM explains, never fixes" principle.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -18,6 +18,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services"]
     verbs: ["get", "list", "watch"]
+  # read crashed pod logs (a separate permission from get pods) — for root-cause
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # read cluster events — where node/pod failure reasons show up
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  # read node conditions (NotReady reason) for node-level context
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
