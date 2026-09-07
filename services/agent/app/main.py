@@ -19,6 +19,15 @@ from typing import Any, TypedDict
 import yaml
 from prometheus_client import Counter, Gauge, start_http_server
 
+# Kubernetes client is optional: if it's unavailable or we're not in-cluster,
+# the agent still runs and explains from metrics alone (just without pod logs).
+try:
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+    _K8S_AVAILABLE = True
+except Exception:  # library not installed
+    _K8S_AVAILABLE = False
+
 ROOT = Path(__file__).resolve().parents[1]
 # config path is overridable; defaults to <app_root>/configs/agent.yaml
 AGENT_CFG_FILE = Path(os.environ.get("AGENT_CFG_FILE", str(ROOT / "configs" / "agent.yaml")))
@@ -305,12 +314,102 @@ CAUSES = {
 }
 
 
+class K8sInspector:
+    """Reads crashed-pod logs, pod status, and cluster events from the Kubernetes
+    API to give the LLM the REAL root cause (e.g. OOMKilled, the actual traceback)
+    instead of a vague 'something is down'. Strictly read-only — the agent's RBAC
+    grants only get/list, so this can inspect but never modify the cluster.
+
+    If the client can't load (not in-cluster, library missing), every method
+    returns empty and the agent degrades gracefully to metrics-only explanations."""
+
+    # map an incident key -> the pod label selector to inspect
+    INCIDENT_SELECTORS = {
+        "model_down":   "app=llama-cpp",
+        "high_latency": "app=llama-cpp",
+        "gateway_down": "app=gateway",
+        "high_errors":  "app=gateway",
+        "breaker_open": "app=gateway",
+        "restart_churn": None,   # cluster-wide; use events
+    }
+
+    def __init__(self, namespace: str = "mlops") -> None:
+        self.namespace = namespace
+        self._core = None
+        if not _K8S_AVAILABLE:
+            return
+        try:
+            k8s_config.load_incluster_config()   # uses the agent ServiceAccount token (the RBAC)
+            self._core = k8s_client.CoreV1Api()
+        except Exception:
+            self._core = None                    # not in-cluster / no token — degrade gracefully
+
+    @property
+    def enabled(self) -> bool:
+        return self._core is not None
+
+    def inspect(self, incident_key: str) -> str:
+        """Return a short text block (pod status + crashed logs + recent events)
+        for the LLM prompt. Empty string if the client is unavailable."""
+        if self._core is None:
+            return ""
+        selector = self.INCIDENT_SELECTORS.get(incident_key, None)
+        parts: list[str] = []
+        try:
+            if selector:
+                parts.append(self._pod_detail(selector))
+            parts.append(self._recent_events())
+        except Exception as exc:  # never let inspection break the cycle
+            return f"(k8s inspection error: {exc})"
+        return "\n".join(p for p in parts if p).strip()
+
+    def _pod_detail(self, selector: str) -> str:
+        pods = self._core.list_namespaced_pod(self.namespace, label_selector=selector)
+        out: list[str] = []
+        for p in pods.items:
+            name = p.metadata.name
+            phase = p.status.phase
+            reason = ""
+            restarts = 0
+            crashed_logs = ""
+            for cs in (p.status.container_statuses or []):
+                restarts = cs.restart_count
+                # why the container last died (OOMKilled, Error, etc.)
+                last = getattr(cs, "last_state", None)
+                if last and getattr(last, "terminated", None):
+                    reason = f"{last.terminated.reason} (exit {last.terminated.exit_code})"
+                    # pull the CRASHED container's logs (previous=True), not the new one
+                    with contextlib.suppress(Exception):
+                        crashed_logs = self._core.read_namespaced_pod_log(
+                            name=name, namespace=self.namespace,
+                            container=cs.name, previous=True, tail_lines=30,
+                        )
+            block = f"Pod {name}: phase={phase} restarts={restarts}"
+            if reason:
+                block += f" lastTerminated={reason}"
+            if crashed_logs:
+                block += f"\nCrashed logs (last 30 lines):\n{crashed_logs.strip()}"
+            out.append(block)
+        return "\n".join(out)
+
+    def _recent_events(self) -> str:
+        ev = self._core.list_namespaced_event(self.namespace)
+        # keep only Warning events, most recent first, capped
+        warns = [e for e in ev.items if e.type == "Warning"]
+        warns = warns[-8:]
+        lines = [f"Event: {e.reason} — {e.message}" for e in warns]
+        return "\n".join(lines)
+
+
 class Explainer:
     """Language-only layer; returns whether a real LLM was actually called."""
 
     def __init__(self, cfg: dict):
         self.backend = cfg.get("llm", {}).get("backend", "template")
         self.cfg = cfg
+        # read-only K8s inspector for root-cause detail (pod logs + events)
+        ns = cfg.get("kubernetes", {}).get("namespace", "mlops")
+        self.k8s = K8sInspector(namespace=ns)
 
     def _generate(self, prompt: str) -> tuple[str | None, bool]:
         import requests
@@ -341,9 +440,17 @@ class Explainer:
 
     def explain_incident(self, mode: str, anomalies: list[dict], metrics: dict) -> tuple[str, bool]:
         detail = "; ".join(item["detail"] for item in anomalies)
+        # pull REAL root-cause detail from Kubernetes (crashed pod logs + events)
+        # for the primary anomaly — grounds the explanation in the actual failure.
+        k8s_detail = ""
+        with contextlib.suppress(Exception):
+            k8s_detail = self.k8s.inspect(anomalies[0]["key"])
         prompt = (
             f"Serving mode: {mode}. Anomalies: {detail}. Metrics: {metrics}. "
-            "Explain what happened and the most likely cause in two sentences; suggest no fixes."
+            + (f"\nKubernetes root-cause detail:\n{k8s_detail}\n" if k8s_detail else "")
+            + "Explain what happened and the most likely cause in two sentences. "
+            "If the Kubernetes detail names a concrete reason (e.g. OOMKilled, a "
+            "traceback), state it explicitly. Suggest no fixes."
         )
         generated, called = self._generate(prompt)
         cause = CAUSES.get(anomalies[0]["key"], "a monitored condition degraded.")
