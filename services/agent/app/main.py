@@ -698,7 +698,10 @@ def pick_cycle(cfg: dict, last_canary: float, last_daily_day: int) -> tuple[str,
     today = utc.timetuple().tm_yday
     if utc.hour == cfg["schedule"]["daily_hour_utc"] and today != last_daily_day:
         return "daily", last_canary, today
-    if now - last_canary >= cfg["schedule"]["canary_interval_seconds"]:
+        
+    canary_enabled = cfg.get("canary", {}).get("enabled", True)
+    
+    if canary_enabled and now - last_canary >= cfg["schedule"]["canary_interval_seconds"]:
         return "canary", now, last_daily_day
     return "poll", last_canary, last_daily_day
 
