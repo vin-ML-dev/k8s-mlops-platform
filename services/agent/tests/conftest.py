@@ -1,10 +1,8 @@
-"""Make the Agent service importable when pytest starts at repository root."""
+"""Configure the Python import path for Agent tests."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
-AGENT_SERVICE_DIR = Path(__file__).resolve().parent
-
-if str(AGENT_SERVICE_DIR) not in sys.path:
-    sys.path.insert(0, str(AGENT_SERVICE_DIR))
+AGENT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(AGENT_ROOT))

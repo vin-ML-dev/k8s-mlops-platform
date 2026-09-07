@@ -22,6 +22,7 @@ cooldown_seconds: 900
 # canary: read the gateway API key from this env var (from the sealed secret).
 # cases default to the built-in DEFAULT_CANARY_CASES in the code.
 canary:
+  enabled: false
   api_key_env: "GATEWAY_API_KEY"
 
 schedule:
