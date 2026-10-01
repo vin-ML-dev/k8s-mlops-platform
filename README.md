@@ -35,7 +35,7 @@ Path 1 delivers Prometheus/Alertmanager firing and resolved notifications. Path 
 
 ## Architecture
 
-![Three-node MLOps platform architecture](docs/images/three-node-architecture.png)
+![Three-node MLOps platform architecture](docs/images/three-node-architecture.jpg)
 
 ### Workload placement
 
